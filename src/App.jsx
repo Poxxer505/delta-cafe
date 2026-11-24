@@ -801,7 +801,7 @@ if (useRemote) {
     // ==========================================================================
     // STATE TAB KEUANGAN & UTANG
     // ==========================================================================
-    const [financePeriod, setFinancePeriod] = useState('Harian'); // 'Harian' | 'Bulanan' | '3 Bulan' | '4 Bulan' | 'Tahunan'
+    const [financePeriod, setFinancePeriod] = useState('Harian'); //'Harian' | 'Mingguan' | 'Bulanan' | '3 Bulan' | 'Tahunan'
     const [periodOffset, setPeriodOffset] = useState(0); // 0 = saat ini, -1 = periode sebelumnya, dst.
     const [financeSubTab, setFinanceSubTab] = useState('Pemasukan'); // 'Pemasukan' | 'Pengeluaran' | 'Utang'
     const [incomeViewMode, setIncomeViewMode] = useState('transaksi'); // 'transaksi' | 'menu'
@@ -1289,7 +1289,7 @@ if (useRemote) {
         };
       }
 
-      if ((financePeriod === '4 Bulan' || financePeriod === 'Tahunan') && periodOffset < 0) {
+      if (financePeriod === 'Tahunan' && periodOffset < 0) {
         const m4 = HISTORICAL_MONTHS['2025-04'];
         const m5 = HISTORICAL_MONTHS['2025-05'];
         const m6 = HISTORICAL_MONTHS['2025-06'];
@@ -1327,15 +1327,26 @@ if (useRemote) {
       }
       const tISO = toLocalISO(tDate);
 
+      // Rentang minggu (Senin - Minggu), digeser per 7 hari sesuai periodOffset
+      const weekStart = new Date();
+      weekStart.setDate(weekStart.getDate() - ((weekStart.getDay() + 6) % 7) + periodOffset * 7);
+      const weekEnd = new Date(weekStart);
+      weekEnd.setDate(weekStart.getDate() + 6);
+      const weekStartISO = toLocalISO(weekStart);
+      const weekEndISO = toLocalISO(weekEnd);
+      const fmtShort = (d) => d.toLocaleDateString('id-ID', { day: 'numeric', month: 'short' });
+
       let pLabel = 'Hari Ini';
       if (financePeriod === 'Harian') {
         pLabel = periodOffset === 0 ? `Hari Ini (${tISO})` : tISO;
+      } else if (financePeriod === 'Mingguan') {
+        pLabel =
+          (periodOffset === 0 ? 'Minggu Ini · ' : '') +
+          `${fmtShort(weekStart)} – ${fmtShort(weekEnd)} ${weekEnd.getFullYear()}`;
       } else if (financePeriod === 'Bulanan') {
         pLabel = 'Bulan Ini (Berjalan)';
       } else if (financePeriod === '3 Bulan') {
         pLabel = 'Periode 3 Bulan Terakhir';
-      } else if (financePeriod === '4 Bulan') {
-        pLabel = periodOffset < 0 ? 'Caturwulan 2025 (Apr–Jul 2025)' : 'Periode 4 Bulan Terakhir';
       } else {
         pLabel = periodOffset < 0 ? 'Tahun 2025 (Arsip Excel)' : `Tahun Ini (${now.getFullYear()})`;
       }
@@ -1343,14 +1354,11 @@ if (useRemote) {
       const filterByPeriod = (dStr) => {
         if (!dStr) return false;
         if (financePeriod === 'Harian') return dStr === tISO;
+        if (financePeriod === 'Mingguan') return dStr >= weekStartISO && dStr <= weekEndISO;
         if (financePeriod === 'Bulanan') return dStr.startsWith(today.slice(0, 7));
         if (financePeriod === '3 Bulan') {
-          const start3M = toLocalISO(new Date(now.getFullYear(), now.getMonth() - 2, 1))
+          const start3M = toLocalISO(new Date(now.getFullYear(), now.getMonth() - 2, 1));
           return dStr >= start3M && dStr <= today;
-        }
-        if (financePeriod === '4 Bulan') {
-          const start4M = toLocalISO(new Date(now.getFullYear(), now.getMonth() - 3, 1))
-          return dStr >= start4M && dStr <= today;
         }
         if (financePeriod === 'Tahunan') return dStr.startsWith(today.slice(0, 4));
         return true;
@@ -1373,9 +1381,9 @@ if (useRemote) {
 
       validOrders.forEach((ord) => {
         totalSales += ord.total;
-        if (ord.paymentMethod === 'Cash') cashSales += ord.total;
+        if (ord.originalMethod === 'Utang' || ord.paymentMethod === 'Utang') newDebtToday += ord.total;
+        else if (ord.paymentMethod === 'Cash') cashSales += ord.total;
         else if (ord.paymentMethod === 'QRIS') qrisSales += ord.total;
-        else if (ord.paymentMethod === 'Utang') newDebtToday += ord.total;
 
         ord.items.forEach((it) => {
           const lineOmzet = it.unitPrice * it.qty;
@@ -1402,12 +1410,14 @@ if (useRemote) {
         });
       });
 
+      const countDebtPayments = true;
+
       const paidDebtCashToday = debtPaymentsToday
-        .filter((p) => p.date === tISO && p.via === 'Cash')
+        .filter((p) => filterByPeriod(p.date) && p.via === 'Cash')
         .reduce((s, p) => s + p.amount, 0);
 
       const paidDebtQrisToday = debtPaymentsToday
-        .filter((p) => p.date === tISO && p.via === 'QRIS')
+        .filter((p) => filterByPeriod(p.date) && p.via === 'QRIS')
         .reduce((s, p) => s + p.amount, 0);
 
       const expBelanjaStok = periodExpenses
@@ -1432,8 +1442,8 @@ if (useRemote) {
         rokokProfit,
         nonRokokSales,
         nonRokokProfit,
-        cashTotal: cashSales + (financePeriod === 'Harian' ? paidDebtCashToday : 0),
-        qrisTotal: qrisSales + (financePeriod === 'Harian' ? paidDebtQrisToday : 0),
+        cashTotal: cashSales + (countDebtPayments ? paidDebtCashToday : 0),
+        qrisTotal: qrisSales + (countDebtPayments ? paidDebtQrisToday : 0),
         utangTotal: newDebtToday,
         paidDebtCashToday,
         expBelanjaStok,
@@ -1889,7 +1899,7 @@ if (useRemote) {
               <div className="p-4 space-y-4 anim-fade">
                 {/* Pilihan Periode Waktu */}
                 <div className="flex gap-1.5 overflow-x-auto pb-1">
-                  {['Harian', 'Bulanan', '3 Bulan', '4 Bulan', 'Tahunan'].map((per) => (
+                  {['Harian', 'Mingguan', 'Bulanan', '3 Bulan', 'Tahunan'].map((per) => (
                     <button
                       key={per}
                       onClick={() => {
@@ -2017,7 +2027,7 @@ if (useRemote) {
                         <span className="text-[11px] font-bold text-gray-600 uppercase">
                           {financePeriod === 'Harian' ? 'Cek Laci Hari Ini' : 'Rincian Pembayaran'}
                         </span>
-                        {financePeriod === 'Harian' && financeReport.paidDebtCashToday > 0 && (
+                        {(financePeriod === 'Harian' || financePeriod === 'Mingguan') && financeReport.paidDebtCashToday > 0 && (
                           <span className="text-[10px] text-emerald-700 font-medium">
                             +Bayar utang {formatRp(financeReport.paidDebtCashToday)}
                           </span>
@@ -2034,7 +2044,7 @@ if (useRemote) {
                         </div>
                         <div className="bg-[#FAFAFA] p-2 rounded-[8px]">
                           <p className="text-gray-400 text-[11px]">
-                            {financePeriod === 'Harian' ? 'Utang Baru' : 'Utang'}
+                            {financePeriod === 'Harian' || financePeriod === 'Mingguan' ? 'Utang Baru' : 'Utang'}
                           </p>
                           <p className="font-bold text-[#FC5454] mt-0.5">{formatRp(financeReport.utangTotal)}</p>
                         </div>
@@ -4050,61 +4060,59 @@ if (useRemote) {
                 </div>
                 <button
                   onClick={() => {
-                    const nominal = Number(payDebtAmount);
-                    let remainingToApply = nominal;
-                    if (remainingToApply <= 0) {
-                      showToast('Masukkan nominal pembayaran yang valid', 'error');
-                      return;
+                  const nominal = Number(payDebtAmount);
+                  if (!nominal || nominal <= 0) {
+                    showToast('Masukkan nominal pembayaran yang valid', 'error');
+                    return;
+                  }
+                  const targetKey = payDebtModal.debtorKey;
+                  let remaining = nominal;
+
+                  // Hitung di luar setState supaya aman dari pemanggilan ganda
+                  const newOrders = orders.map((ord) => {
+                    if (
+                      remaining > 0 &&
+                      ord.orderStatus !== 'Dibatalkan' &&
+                      (ord.paymentMethod === 'Utang' || ord.originalMethod === 'Utang') &&
+                      ord.paymentStatus !== 'Lunas' &&
+                      normalizeName(ord.customerName) === targetKey
+                    ) {
+                      const currentPaid = ord.paidAmount || 0;
+                      const apply = Math.min(ord.total - currentPaid, remaining);
+                      remaining -= apply;
+                      const newPaid = currentPaid + apply;
+                      const isNowLunas = newPaid >= ord.total;
+                      return {
+                        ...ord,
+                        paidAmount: newPaid,
+                        paymentStatus: isNowLunas ? 'Lunas' : 'Belum dibayar',
+                        paymentMethod: isNowLunas ? payDebtVia : 'Utang',
+                        originalMethod: 'Utang'
+                      };
                     }
-                    const targetKey = payDebtModal.debtorKey;
+                    return ord;
+                  });
 
-                    setOrders((prev) =>
-                      prev.map((ord) => {
-                        if (
-                          remainingToApply > 0 &&
-                          ord.orderStatus !== 'Dibatalkan' &&
-                          (ord.paymentMethod === 'Utang' || ord.originalMethod === 'Utang') &&
-                          ord.paymentStatus !== 'Lunas' &&
-                          normalizeName(ord.customerName) === targetKey
-                        ) {
-                          const currentPaid = ord.paidAmount || 0;
-                          const unpaid = ord.total - currentPaid;
-                          const apply = Math.min(unpaid, remainingToApply);
-                          remainingToApply -= apply;
-                          const newPaid = currentPaid + apply;
-                          const isNowLunas = newPaid >= ord.total;
-                          return {
-                            ...ord,
-                            paidAmount: newPaid,
-                            paymentStatus: isNowLunas ? 'Lunas' : 'Belum dibayar',
-                            paymentMethod: isNowLunas ? payDebtVia : 'Utang',
-                            originalMethod: 'Utang'
-                          };
-                        }
-                        return ord;
-                      })
-                    );
+                  const newManual = manualDebts.map((md) => {
+                    if (remaining > 0 && normalizeName(md.customerName) === targetKey) {
+                      const currentPaid = md.paidAmount || 0;
+                      const unpaid = md.amount - currentPaid;
+                      if (unpaid > 0) {
+                        const apply = Math.min(unpaid, remaining);
+                        remaining -= apply;
+                        return { ...md, paidAmount: currentPaid + apply };
+                      }
+                    }
+                    return md;
+                  });
 
-                    setManualDebts((prev) =>
-                      prev.map((md) => {
-                        if (remainingToApply > 0 && normalizeName(md.customerName) === targetKey) {
-                          const currentPaid = md.paidAmount || 0;
-                          const unpaid = md.amount - currentPaid;
-                          if (unpaid > 0) {
-                            const apply = Math.min(unpaid, remainingToApply);
-                            remainingToApply -= apply;
-                            return { ...md, paidAmount: currentPaid + apply };
-                          }
-                        }
-                        return md;
-                      })
-                    );
+                  setOrders(newOrders);
+                  setManualDebts(newManual);
+                  setDebtPaymentsToday((prev) => [...prev, { date: todayISO(), amount: nominal, via: payDebtVia }]);
 
-                    setDebtPaymentsToday((prev) => [...prev, { date: todayISO(), amount: nominal, via: payDebtVia }]);
-
-                    showToast(`Pembayaran utang ${formatRp(nominal)} (${payDebtVia}) dicatat`);
-                    setPayDebtModal(null);
-                  }}
+                  showToast(`Pembayaran utang ${formatRp(nominal)} (${payDebtVia}) dicatat`);
+                  setPayDebtModal(null);
+                }}
                   className="w-full min-h-[46px] bg-[#FC5454] text-white font-bold rounded-[10px]"
                 >
                   Simpan Pembayaran
